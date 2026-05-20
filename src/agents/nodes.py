@@ -1,6 +1,13 @@
+import os
+import yaml
 from langchain_core.messages import SystemMessage, HumanMessage
 from src.models.llm_factory import get_llm
 from src.agents.state import GraphState
+
+# 加载外部 Prompt 配置文件
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config", "prompts.yaml")
+with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+    PROMPTS = yaml.safe_load(f)
 
 def _accumulate_tokens(state: GraphState, response) -> dict:
     current_usage = state.get("token_usage")
@@ -25,16 +32,10 @@ def clarifier_node(state: GraphState) -> GraphState:
     llm = get_llm()
     original_question = state["original_question"]
     
-    prompt = f"""
-    你是一个问题分析与澄清专家。
-    用户的原始问题是："{original_question}"
+    # 从配置文件读取 Prompt 模板并格式化
+    prompt_template = PROMPTS["clarifier"]["system"]
+    prompt = prompt_template.format(original_question=original_question)
     
-    请分析这个问题是否清晰、明确、包含足够的上下文。
-    如果问题太短或模糊，请将其重构、扩写为一个清晰、具体、结构化且包含合理假设的问题，以帮助下游 AI 更好地回答。
-    如果原问题已经很清晰，请只对它做轻微润色。
-    
-    只需输出重构后的问题，不要输出其他废话。
-    """
     response = llm.invoke([HumanMessage(content=prompt)])
     
     return {
@@ -49,11 +50,10 @@ def generator_node(state: GraphState) -> GraphState:
     llm = get_llm()
     question = state.get("clarified_question", state["original_question"])
     
-    prompt = f"""
-    你是一个专家级助手。请尽可能详尽、准确地回答以下问题：
+    # 从配置文件读取 Prompt 模板并格式化
+    prompt_template = PROMPTS["generator"]["system"]
+    prompt = prompt_template.format(question=question)
     
-    问题：{question}
-    """
     response = llm.invoke([HumanMessage(content=prompt)])
     
     return {
@@ -71,10 +71,9 @@ def reviewer_node(state: GraphState) -> GraphState:
     question = state.get("clarified_question", state["original_question"])
     draft = state["current_draft"]
     
-    roles = {
-        "逻辑审查员": "请重点关注回答的逻辑是否严密，推理是否有漏洞，结构是否清晰。",
-        "全面性审查员": "请重点关注回答是否全面，有没有遗漏问题中隐含的关键点，或者可以补充的更深层次的视角。"
-    }
+    # 从配置文件动态读取所有的角色和基础模板
+    roles = PROMPTS.get("reviewers", {})
+    reviewer_base = PROMPTS["reviewer_base"]
     
     review_feedback = {}
     all_passed = True
@@ -84,17 +83,14 @@ def reviewer_node(state: GraphState) -> GraphState:
         current_state_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     
     for role_name, role_prompt in roles.items():
-        prompt = f"""
-        你现在的角色是：{role_name}。{role_prompt}
+        # 格式化各个角色的具体 Prompt
+        prompt = reviewer_base.format(
+            role_name=role_name,
+            role_prompt=role_prompt,
+            question=question,
+            draft=draft
+        )
         
-        原问题：{question}
-        当前的草稿回答：
-        {draft}
-        
-        请给出你的审查意见。指出具体需要改进的地方。
-        如果你认为当前的回答在这个视角下已经非常完美，没有任何需要修改的地方，请在你的回复最后另起一行输出 "PASS"。
-        否则，请给出详细的修改建议。
-        """
         response = llm.invoke([HumanMessage(content=prompt)])
         feedback = response.content
         review_feedback[role_name] = feedback
@@ -127,19 +123,14 @@ def reviser_node(state: GraphState) -> GraphState:
     
     feedback_str = "\n".join([f"【{role}】的意见:\n{fb}" for role, fb in feedback.items()])
     
-    prompt = f"""
-    你是一个优化专家。你需要根据多位审查员的意见，对当前的回答草稿进行修改和完善。
+    # 从配置文件读取 Prompt 模板并格式化
+    prompt_template = PROMPTS["reviser"]["system"]
+    prompt = prompt_template.format(
+        question=question,
+        draft=draft,
+        feedback=feedback_str
+    )
     
-    原问题：{question}
-    
-    当前草稿：
-    {draft}
-    
-    审查意见：
-    {feedback_str}
-    
-    请严格综合上述审查意见，重新写出一份完美的回答。直接输出新的回答内容即可。
-    """
     response = llm.invoke([HumanMessage(content=prompt)])
     
     return {

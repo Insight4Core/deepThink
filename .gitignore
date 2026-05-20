@@ -8,6 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+outputs/
 build/
 develop-eggs/
 dist/
@@ -172,7 +173,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-
+.DS_Store
 # Cursor  
 #  Cursor is an AI-powered code editor.`.cursorignore` specifies files/directories to 
 #  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
