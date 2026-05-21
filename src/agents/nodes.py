@@ -1,10 +1,10 @@
 import os
 import yaml
+import json
 from langchain_core.messages import SystemMessage, HumanMessage
 from src.models.llm_factory import get_llm
 from src.agents.state import GraphState
 
-# 加载外部 Prompt 配置文件
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config", "prompts.yaml")
 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
     PROMPTS = yaml.safe_load(f)
@@ -25,32 +25,74 @@ def _accumulate_tokens(state: GraphState, response) -> dict:
     return current_usage
 
 def clarifier_node(state: GraphState) -> GraphState:
-    """
-    意图澄清节点：分析用户输入，如果不清晰则进行扩充和澄清。
-    目前采取自动扩写模式（Autonomous Refinement）。
-    """
     llm = get_llm()
     original_question = state["original_question"]
+    history = state.get("clarification_history", [])
     
-    # 从配置文件读取 Prompt 模板并格式化
+    history_str = "无"
+    if history:
+        history_str = "\n".join([f"{item['role']}: {item['content']}" for item in history])
+        
+    rounds = state.get("clarification_rounds", 0)
+    instruction_extra = ""
+    if rounds >= 3:
+        instruction_extra = "【最高优先级警告】追问次数已达上限！你本次必须设置 \"is_clear\": true，并且 response 必须是结合了所有历史记录重构后的【最终清晰问题】，绝对不能再向用户追问！"
+    
     prompt_template = PROMPTS["clarifier"]["system"]
-    prompt = prompt_template.format(original_question=original_question)
+    prompt = prompt_template.format(
+        original_question=original_question, 
+        history_str=history_str,
+        instruction_extra=instruction_extra
+    )
     
     response = llm.invoke([HumanMessage(content=prompt)])
     
-    return {
-        "clarified_question": response.content,
-        "token_usage": _accumulate_tokens(state, response)
-    }
+    # 尝试解析 JSON
+    try:
+        content = response.content.strip()
+        import re
+        match = re.search(r'\{.*\}', content, re.DOTALL)
+        if match:
+            content = match.group(0)
+            
+        data = json.loads(content)
+        is_clear = data.get("is_clear", True)
+        msg = data.get("response", response.content)
+    except Exception as e:
+        # 如果解析失败，默认当作清楚了，直接输出
+        is_clear = True
+        msg = response.content
+
+    # 强制熔断机制：即使大模型没有听话，超过3轮也强制跳出
+    if rounds >= 3:
+        is_clear = True
+        
+    # 如果不清楚并且没有超过3轮
+    if not is_clear:
+        return {
+            "needs_clarification": True,
+            "clarification_message": msg,
+            "clarification_rounds": rounds + 1,
+            "token_usage": _accumulate_tokens(state, response)
+        }
+    else:
+        return {
+            "needs_clarification": False,
+            "clarified_question": msg,
+            "token_usage": _accumulate_tokens(state, response)
+        }
+
+def ask_human_node(state: GraphState):
+    """
+    占位节点：在进入此节点前图会被挂起 (interrupt)。
+    主程序通过 update_state 作为此节点输入人类的回答。
+    """
+    pass
 
 def generator_node(state: GraphState) -> GraphState:
-    """
-    生成初始草稿节点。
-    """
     llm = get_llm()
     question = state.get("clarified_question", state["original_question"])
     
-    # 从配置文件读取 Prompt 模板并格式化
     prompt_template = PROMPTS["generator"]["system"]
     prompt = prompt_template.format(question=question)
     
@@ -63,15 +105,10 @@ def generator_node(state: GraphState) -> GraphState:
     }
 
 def reviewer_node(state: GraphState) -> GraphState:
-    """
-    多角色审查节点。
-    模拟多个不同视角的 Reviewer 对当前草稿进行审查。
-    """
     llm = get_llm()
     question = state.get("clarified_question", state["original_question"])
     draft = state["current_draft"]
     
-    # 从配置文件动态读取所有的角色和基础模板
     roles = PROMPTS.get("reviewers", {})
     reviewer_base = PROMPTS["reviewer_base"]
     
@@ -83,7 +120,6 @@ def reviewer_node(state: GraphState) -> GraphState:
         current_state_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     
     for role_name, role_prompt in roles.items():
-        # 格式化各个角色的具体 Prompt
         prompt = reviewer_base.format(
             role_name=role_name,
             role_prompt=role_prompt,
@@ -98,7 +134,6 @@ def reviewer_node(state: GraphState) -> GraphState:
         if "PASS" not in feedback.upper():
             all_passed = False
             
-        # 累加 Token
         metadata = getattr(response, "response_metadata", {})
         usage = metadata.get("token_usage", {})
         if usage:
@@ -113,9 +148,6 @@ def reviewer_node(state: GraphState) -> GraphState:
     }
 
 def reviser_node(state: GraphState) -> GraphState:
-    """
-    根据审查意见修改节点。
-    """
     llm = get_llm()
     question = state.get("clarified_question", state["original_question"])
     draft = state["current_draft"]
@@ -123,7 +155,6 @@ def reviser_node(state: GraphState) -> GraphState:
     
     feedback_str = "\n".join([f"【{role}】的意见:\n{fb}" for role, fb in feedback.items()])
     
-    # 从配置文件读取 Prompt 模板并格式化
     prompt_template = PROMPTS["reviser"]["system"]
     prompt = prompt_template.format(
         question=question,

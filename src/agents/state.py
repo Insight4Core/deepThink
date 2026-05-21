@@ -16,6 +16,14 @@ class GraphState(TypedDict):
     # 对话历史，或者用于节点间传递消息（必须使用 Annotated 和 operator.add 保证消息被追加而不是覆盖）
     messages: Annotated[List[BaseMessage], operator.add]
     
+    # [新增] 多轮澄清历史
+    clarification_history: Annotated[List[Dict[str, str]], operator.add]
+    
+    # [新增] 澄清控制字段
+    needs_clarification: bool
+    clarification_message: str
+    clarification_rounds: int
+    
     # 当前草稿 / 答案
     current_draft: str
     
