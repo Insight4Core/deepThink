@@ -8,7 +8,9 @@ DeepThink 是一个基于 Agent 架构的大模型回答增强系统。它通过
 - **📝 多角色评审机制**：初稿生成后，系统会自动召唤多位“虚拟审查员”（如逻辑审查员、全面性审查员）对草稿从不同维度进行严苛的挑刺。
 - **🔄 自我迭代进化**：根据审查员的意见，Reviser 会重新润色草稿，直到所有审查员一致通过（或达到设定的最大迭代次数），杜绝敷衍回答。
 - **⚙️ 架构化 Prompt 管理**：所有的角色设定和 Prompt 均独立在 `config/prompts.yaml` 中。您可以随时零代码增加新的审查角色（例如“安全审查专家”或“性能优化师”）。
-- **📊 自动化基准测试框架**：内置了一套自动化测试脚本，可以无头运行多个复杂刁钻的用例（甚至自动模拟敷衍的客户来测试系统的抗压能力），一键生成详尽的评估报告。
+- **🛡️ 结构化输出与自动降级**：Clarifier 和 Reviewer 均通过 Pydantic Schema 进行结构化输出；当模型后端不支持原生结构化输出时，会自动降级为 JSON 文本解析，并对常见字段别名做容错映射。
+- **⚡ Reviewer 并行调用**：多个审查员并行执行，显著降低整体审查等待时间。
+- **📊 自动化基准测试 + LLM-as-Judge**：内置了一套自动化测试脚本，可以无头运行多个复杂刁钻的用例（甚至自动模拟敷衍的客户来测试系统的抗压能力），并由独立的 Judge 模型按评分标准自动打分，一键生成详尽的评估报告。
 - **💾 沉淀与持久化**：最终回答会自动转换为格式美观的 HTML 文件永久保存，同时在终端实时统计各节点的 Token 消耗量。
 
 ## 📁 项目结构
@@ -25,7 +27,10 @@ deepThink/
 │   │   ├── nodes.py        # 各个 Agent 节点的具体业务逻辑
 │   │   └── state.py        # 全局状态 (GraphState) 定义
 │   └── models/
-│       └── llm_factory.py  # LLM 模型工厂 (支持 OpenAI/OpenRouter 等)
+│       ├── llm_factory.py  # LLM 模型工厂：统一调用、Token 统计、重试、结构化输出
+│       └── schemas.py      # Pydantic 结构化输出模型
+├── tests/
+│   └── test_smoke.py       # 基础冒烟测试
 ├── main.py                 # CLI 交互式对话主入口
 ├── requirements.txt        # 项目依赖
 └── .env.example            # 环境变量配置模板
@@ -57,6 +62,9 @@ deepThink/
    
    # 发生 Review 不通过时，最大允许的重写循环次数
    DEEPTHINK_MAX_ITERATIONS=2
+   
+   # 如果你的模型后端不支持结构化输出/函数调用，强制走 JSON 解析降级路径
+   # DEEPTHINK_FORCE_JSON_FALLBACK=1
    ```
 
 ## 🚀 快速开始
@@ -73,10 +81,16 @@ python main.py
 ```bash
 python scripts/run_benchmark.py
 ```
-> 脚本会自动处理挂起点，并在运行结束后在 `outputs/` 目录下生成一份 Markdown 格式的详细测评报告，您可以像批改考卷一样直观地查阅系统的各项能力表现。
+> 脚本会自动处理挂起点，运行结束后在 `outputs/` 目录下生成一份 Markdown 格式的详细测评报告，并附带每个用例的 **LLM-as-Judge 自动评分**、优点与不足，您可以像批改考卷一样直观地查阅系统的各项能力表现。
+
+### 3. 运行单元测试
+```bash
+python -m unittest tests.test_smoke -v
+```
 
 ## 🤝 参与贡献
 欢迎根据您的业务场景自由拓展节点！您可以非常方便地：
-1. 在 `prompts.yaml` 中增加特定的 Reviewer 角色。
-2. 在 `src/agents/nodes.py` 中接入联网搜索节点 (Web Search Node)。
-3. 将输出格式对接到您的飞书、钉钉或者网页后端。
+1. 在 `prompts.yaml` 的 `reviewer_roles` 中增加特定的 Reviewer 角色。
+2. 在 `src/models/schemas.py` 中定义新的结构化输出模型。
+3. 在 `src/agents/nodes.py` 中接入联网搜索节点 (Web Search Node)。
+4. 将输出格式对接到您的飞书、钉钉或者网页后端。

@@ -1,7 +1,9 @@
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from src.agents.state import GraphState
 from src.agents.nodes import clarifier_node, ask_human_node, generator_node, reviewer_node, reviser_node
+from src.models.schemas import ClarifierOutput, ReviewFeedback, JudgeOutput
 
 def should_continue(state: GraphState) -> str:
     """
@@ -68,7 +70,9 @@ def build_graph() -> StateGraph:
     workflow.add_edge("reviser", "reviewer")
     
     # 编译图，配置记忆点并设置挂起点 (interrupt_before)
-    memory = MemorySaver()
+    # 显式允许 checkpoint 序列化自定义 Pydantic 模型，避免未来版本被拦截
+    serde = JsonPlusSerializer(allowed_msgpack_modules=[ClarifierOutput, ReviewFeedback, JudgeOutput])
+    memory = MemorySaver(serde=serde)
     app = workflow.compile(
         checkpointer=memory,
         interrupt_before=["ask_human"]

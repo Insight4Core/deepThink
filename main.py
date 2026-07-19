@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import uuid
+import logging
 import markdown
 from dotenv import load_dotenv
 from rich.console import Console
@@ -9,9 +10,15 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 
 from src.agents.graph import build_graph
+from src.models.schemas import ReviewFeedback
 
 # 尝试加载环境变量
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 
 console = Console()
 
@@ -94,8 +101,12 @@ def main():
                                     console.print("[dim]审查意见:[/dim]")
                                     feedback = state_update.get("review_feedback", {})
                                     for role, fb in feedback.items():
-                                        short_fb = fb[:100] + "..." if len(fb) > 100 else fb
-                                        console.print(f"  - {role}: {short_fb}")
+                                        if isinstance(fb, ReviewFeedback):
+                                            short_fb = fb.comments[:80] + "..." if len(fb.comments) > 80 else fb.comments
+                                            console.print(f"  - {role}: 评分 {fb.score}/10 | {short_fb}")
+                                        else:
+                                            short_fb = str(fb)[:80] + "..." if len(str(fb)) > 80 else str(fb)
+                                            console.print(f"  - {role}: {short_fb}")
                                     if state_update.get("is_approved"):
                                         console.print("[bold green]✅ 所有 Reviewer 均通过！[/]")
                                     else:

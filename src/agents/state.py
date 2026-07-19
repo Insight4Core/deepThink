@@ -28,8 +28,8 @@ class GraphState(TypedDict):
     current_draft: str
     
     # Reviewer 们的反馈意见 (每个reviewer的反馈保存在这里)
-    # 例如: {"logic_reviewer": "...", "accuracy_reviewer": "..."}
-    review_feedback: Dict[str, str]
+    # 例如: {"逻辑审查员": ReviewFeedback(score=9, comments="...", passed=True), ...}
+    review_feedback: Dict[str, Any]
     
     # 当前迭代次数
     iteration_count: int
